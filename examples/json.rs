@@ -24,7 +24,7 @@ enum Value {
     Null,
 }
 
-fn ws<'a>() -> Parser<'a, &'a str, &'a str> {
+fn ws<'a>() -> Parser<'a, &'a str, &'a str, ()> {
     unit()
         .filter(|c: &char| c.is_whitespace())
         .ignore()
@@ -32,7 +32,7 @@ fn ws<'a>() -> Parser<'a, &'a str, &'a str> {
         .input()
 }
 
-fn string<'a>() -> Parser<'a, &'a str, String> {
+fn string<'a>() -> Parser<'a, &'a str, String, ()> {
     just("\\\\")
         .or(just("\\\""))
         .ignore()
@@ -43,7 +43,7 @@ fn string<'a>() -> Parser<'a, &'a str, String> {
         .map(String::from)
 }
 
-fn number<'a>() -> Parser<'a, &'a str, &'a str> {
+fn number<'a>() -> Parser<'a, &'a str, f32, ()> {
     let digit = unit::<str>().filter(char::is_ascii_digit);
 
     digit
@@ -52,10 +52,11 @@ fn number<'a>() -> Parser<'a, &'a str, &'a str> {
         .many(1..)
         .then(just(".").then(digit.ignore().many(1..)).optional())
         .input()
+        .map(|n| n.parse().unwrap())
 }
 
 // as it is now, recursive parsers must be defined at the function level
-fn value(input: &str, at: usize) -> ParseResult<Value> {
+fn value(input: &str, at: usize) -> ParseResult<Value, ()> {
     let object = {
         let member = string()
             .surround(ws(), ws())
@@ -78,12 +79,12 @@ fn value(input: &str, at: usize) -> ParseResult<Value> {
         just("true").map(|_| Value::True),
         just("false").map(|_| Value::False),
         just("null").map(|_| Value::Null),
-        string().map(|s| Value::String(s)),
-        number().map(|n| Value::Number(n.parse().unwrap())),
+        string().map(Value::String),
+        number().map(Value::Number),
     ])
     .parse_at(input, at)
 }
 
-fn element<'a>() -> Parser<'a, &'a str, Value> {
+fn element<'a>() -> Parser<'a, &'a str, Value, ()> {
     Parser::new(value).surround(ws(), ws())
 }

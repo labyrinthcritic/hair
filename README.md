@@ -6,19 +6,32 @@ hair is a simple and extensible parser combinator crate that stays out of your w
 
  - Compose parsers in a modular, functional style, and test them independently of one another.
 
- - Error handling is in the user's control. Parsers have an error type
-   of `()` by default; these parsers can be `map_err`-ed to yield more useful
-   errors. Compose primitive combinators to create your own 'primitives' that
-   yield proper errors.
+ - Error handling is in the user's control. Parsers have an error type of `()`
+   by default; these parsers can be `map_err`-ed to yield more useful errors.
+   Compose primitive combinators to create your own 'primitives' that yield
+   proper errors.
 
-   ```rust,ignore
+   ```rust
    use hair::{*, primitive::*};
-  
-   let kind = |kind: TokenKind| unit()
-       .filter(|token| token.kind == kind)
-       .map_err(|_| Expected(kind));
 
-   let result = kind(Semi).parse(&[Token { kind: Semi }]);
+   struct Token {
+     kind: TokenKind,
+   }
+
+   #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+   enum TokenKind {
+       Identifier,
+   }
+
+   struct Expected(TokenKind);
+
+   use TokenKind::*;
+   let kind = |kind: TokenKind| unit::<[Token]>()
+       .filter(move |token: &&Token| token.kind == kind)
+       .map_err(move |_| Expected(kind));
+
+   let tokens = &[Token { kind: Identifier }];
+   let result = kind(Identifier).parse(tokens);
    ````
 
    (Error propogation is WIP.)
@@ -36,8 +49,8 @@ hair is a simple and extensible parser combinator crate that stays out of your w
 
    ```rust
    use hair::{*, primitive::*};
-   //         Parser<I,    O>
-   let space: Parser<&str, &str> = just(" ");
+   //         Parser<I,    O,    E> (input, output, error)
+   let space: Parser<&str, &str, ()> = just(" ");
    ```
 
    This paradigm will most likely change in the future. hair's main goal is
