@@ -1,0 +1,9 @@
+{
+    "characters": [
+        {
+            "name": "Wise Wizard",
+            "age": 500,
+            "items": ["stick", "rock", "potion"]
+        }
+    ]
+}
