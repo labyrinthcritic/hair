@@ -40,7 +40,7 @@ fn map() {
 fn filter() {
     let p = unit().filter(|&c| c == 'h');
     assert_eq!(p.parse("hello, world!"), Ok('h'));
-    assert_eq!(p.parse("world, hello!"), Err(()));
+    assert_eq!(p.parse("world, hello!"), Err(((), 0)));
 }
 
 #[test]
@@ -62,14 +62,8 @@ fn optional() {
 fn many() {
     let char = |c: char| unit::<str>().filter(move |&d| c == d);
 
-    let p = char('a').many(..);
+    let p = char('a').many();
     assert_eq!(p.parse("aaaaaa"), Ok(vec!['a'; 6]));
-
-    let p = char('a').many(..=4);
-    assert_eq!(p.parse("aaaaaa"), Ok(vec!['a'; 4]));
-
-    let p = char('a').many(3..);
-    assert_eq!(p.parse("aa"), Err(()));
 }
 
 #[test]
@@ -82,6 +76,6 @@ fn separate() {
 
 #[test]
 fn span_input() {
-    let p = unit::<str>().many(..=5).input().with_span();
-    assert_eq!(p.parse("aaaaaaaaaaaa"), Ok(("aaaaa", 0..5)));
+    let p = unit::<str>().many().input().with_span();
+    assert_eq!(p.parse("aaaaa"), Ok(("aaaaa", 0..5)));
 }

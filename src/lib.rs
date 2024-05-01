@@ -6,14 +6,11 @@ pub mod slice;
 #[cfg(test)]
 mod test;
 
-use std::{
-    ops::{Bound, Range, RangeBounds},
-    rc::Rc,
-};
+use std::{ops::Range, rc::Rc};
 
 pub use slice::Slice;
 
-pub type ParseResult<O, E> = Result<(O, usize), E>;
+pub type ParseResult<O, E> = Result<(O, usize), Error<E>>;
 
 /// Trait object of a parsing function.
 pub type ParseFn<'a, I, O, E> = dyn Fn(I, usize) -> ParseResult<O, E> + 'a;
@@ -49,11 +46,13 @@ impl<'a, I: Clone + 'a, O: 'a, E: 'a> Parser<'a, I, O, E> {
     }
 
     /// Parse from the beginning, and collect the output.
-    pub fn parse(&self, i: I) -> Result<O, E> {
-        self.parse_at(i, 0).map(|(o, _)| o)
+    pub fn parse(&self, i: I) -> Result<O, (E, usize)> {
+        self.parse_at(i, 0)
+            .map(|(o, _)| o)
+            .map_err(|Error { inner, at, .. }| (inner, at))
     }
 
-    /// Map the parser's output, i.e. turn a `Parser<I, O, E>` to a `Parser<I, O1, E>`.
+    /// Map the parser's output, i.e. turn a `Parser<I, O, E>` into a `Parser<I, O1, E>`.
     pub fn map<O1: 'a, F>(self, f: F) -> Parser<'a, I, O1, E>
     where
         F: Fn(O) -> O1 + 'a,
@@ -61,12 +60,43 @@ impl<'a, I: Clone + 'a, O: 'a, E: 'a> Parser<'a, I, O, E> {
         Parser::new(move |input, at| self.parse_at(input, at).map(|(o, rest)| (f(o), rest)))
     }
 
-    /// Map the parser's error, if any, i.e. turn a `Parser<I, O, E>` to a `Parser<I, O, E1>`.
+    /// Map the parser's error, if any, i.e. turn a `Parser<I, O, E>` into a `Parser<I, O, E1>`.
     pub fn map_err<E1: 'a, F>(self, f: F) -> Parser<'a, I, O, E1>
     where
         F: Fn(E) -> E1 + 'a,
     {
-        Parser::new(move |input, at| self.parse_at(input, at).map_err(&f))
+        Parser::new(move |input, at| {
+            self.parse_at(input, at)
+                .map_err(|Error { inner, recover, at }| Error {
+                    inner: f(inner),
+                    recover,
+                    at,
+                })
+        })
+    }
+
+    /// Make a parser yield a fatal error on failure. This should be used in
+    /// situations where a previous parser guarantees that this is the only
+    /// correct parsing path.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // since key-value pairs only exist in objects, `:` will always come after
+    /// // the identifier, and a value will always come after the `:`.
+    /// let key_value_pair = identifier()
+    ///     .then(just(":").expect())
+    ///     .then(value().expect());
+    ///
+    /// let object = just("{").then(key_value_pair.separate(just(","))).then("}");
+    /// ```
+    ///
+    /// Where `identifier` and `value` are user-defined parsers.
+    pub fn expect(self) -> Parser<'a, I, O, E> {
+        Parser::new(move |input, at| match self.parse_at(input, at) {
+            o @ Ok(_) => o,
+            Err(err) => Err(err.fail()),
+        })
     }
 
     /// Make a parser fail if its output does not satisfy `predicate`.
@@ -76,15 +106,23 @@ impl<'a, I: Clone + 'a, O: 'a, E: 'a> Parser<'a, I, O, E> {
     {
         Parser::new(move |input, at| match self.parse_at(input, at) {
             Ok((o, rest)) if predicate(&o) => Ok((o, rest)),
-            Ok((_, _)) | Err(_) => Err(()),
+            Ok(_) | Err(_) => Err(Error {
+                inner: (),
+                recover: Recover::Recoverable,
+                at,
+            }),
         })
     }
 
     /// Parse with `self`; on failure, parse with `other`.
-    pub fn or<E1: 'a>(self, other: Parser<'a, I, O, E1>) -> Parser<'a, I, O, E1> {
-        Parser::new(move |input: I, at| {
-            self.parse_at(input.clone(), at)
-                .or_else(|_| other.parse_at(input, at))
+    /// Fatal errors will short-circuit.
+    pub fn or(self, other: Parser<'a, I, O, E>) -> Parser<'a, I, O, E> {
+        Parser::new(move |input: I, at| match self.parse_at(input.clone(), at) {
+            Ok(ok) => Ok(ok),
+            Err(err) => match err.recover {
+                Recover::Recoverable => other.parse_at(input, at),
+                Recover::Fatal => Err(err),
+            },
         })
     }
 
@@ -118,14 +156,14 @@ impl<'a, I: Clone + 'a, O: 'a, E: 'a> Parser<'a, I, O, E> {
         })
     }
 
-    /// Make this parser optional. This parser will always succeed.
+    /// Make this parser optional. Succeeds on recoverable errors.
     pub fn optional(self) -> Parser<'a, I, Option<O>, E> {
-        Parser::new(move |input, at| {
-            if let Ok((o, rest)) = self.parse_at(input, at) {
-                Ok((Some(o), rest))
-            } else {
-                Ok((None, at))
-            }
+        Parser::new(move |input, at| match self.parse_at(input, at) {
+            Ok((o, rest)) => Ok((Some(o), rest)),
+            Err(err) => match err.recover {
+                Recover::Recoverable => Ok((None, at)),
+                Recover::Fatal => Err(err),
+            },
         })
     }
 
@@ -138,51 +176,52 @@ impl<'a, I: Clone + 'a, O: 'a, E: 'a> Parser<'a, I, O, E> {
         left.right(self).left(right)
     }
 
-    /// Repeat this parser indefinitely, until either the parser fails,
-    /// or the upper bound of `range` is reached.
-    pub fn many<R: RangeBounds<usize> + 'a>(self, range: R) -> Parser<'a, I, Vec<O>, ()> {
+    /// Repeat this parser indefinitely.
+    pub fn many(self) -> Parser<'a, I, Vec<O>, E> {
         Parser::new(move |input: I, mut at| {
             let mut os = Vec::new();
-            while let Ok((o, rest)) = self.parse_at(input.clone(), at) {
-                os.push(o);
-                at = rest;
-
-                if match range.end_bound() {
-                    Bound::Included(&b) => os.len() > b - 1,
-                    Bound::Excluded(&b) => os.len() >= b - 1,
-                    Bound::Unbounded => false,
-                } {
-                    break;
+            loop {
+                match self.parse_at(input.clone(), at) {
+                    Ok((o, rest)) => {
+                        os.push(o);
+                        at = rest;
+                    }
+                    Err(err) => match err.recover {
+                        Recover::Recoverable => break,
+                        Recover::Fatal => return Err(err),
+                    },
                 }
             }
 
-            if range.contains(&os.len()) {
-                Ok((os, at))
-            } else {
-                Err(())
-            }
+            Ok((os, at))
         })
     }
 
     /// Parse zero or more `self`s, separated with `by`. This allows a trailing
     /// separator.
-    pub fn separate<O1: 'a>(self, by: Parser<'a, I, O1, E>) -> Parser<'a, I, Vec<O>, ()> {
-        // i'm unsatisfied with this implementation
-        // TODO: allow for ranges like `many`, and make trailing separator configurable
+    pub fn separate<O1: 'a>(self, by: Parser<'a, I, O1, E>) -> Parser<'a, I, Vec<O>, E> {
         Parser::new(move |input: I, mut at| {
             let mut os = Vec::new();
             loop {
-                if let Ok((o, rest)) = self.parse_at(input.clone(), at) {
-                    os.push(o);
-                    at = rest;
-                } else {
-                    break;
+                match self.parse_at(input.clone(), at) {
+                    Ok((o, rest)) => {
+                        os.push(o);
+                        at = rest;
+                    }
+                    Err(err) => match err.recover {
+                        Recover::Recoverable => break,
+                        Recover::Fatal => return Err(err.fail()),
+                    },
                 }
 
-                if let Ok((_, rest)) = by.parse_at(input.clone(), at) {
-                    at = rest;
-                } else {
-                    break;
+                match by.parse_at(input.clone(), at) {
+                    Ok((_, rest)) => {
+                        at = rest;
+                    }
+                    Err(err) => match err.recover {
+                        Recover::Recoverable => break,
+                        Recover::Fatal => return Err(err.fail()),
+                    },
                 }
             }
 
@@ -193,6 +232,11 @@ impl<'a, I: Clone + 'a, O: 'a, E: 'a> Parser<'a, I, O, E> {
     /// Drop this parser's output.
     pub fn ignore(self) -> Parser<'a, I, (), E> {
         self.map(|_| ())
+    }
+
+    /// Drop this parser's error.
+    pub fn ignore_err(self) -> Parser<'a, I, O, ()> {
+        self.map_err(|_| ())
     }
 
     /// Associate the output with the range of indices the parser consumed.
@@ -212,4 +256,62 @@ impl<'a, S: Slice<'a> + ?Sized, O: 'a, E: 'a> Parser<'a, &'a S, O, E> {
             Ok((input.index_between(at, rest), rest))
         })
     }
+}
+
+/// This type wraps errors as they propagate upward through parsers. `E` is the
+/// parser's actual error type, whether it be `()` or a user-defined error.
+///
+/// hair borrows the error propagation mechanism seen in some other combinator
+/// libraries, such as nom. Errors have a state of 'recoverable' or 'fatal',
+/// where fatal errors will always propagate upward regardless of alternatives.
+/// hair's primitive combinators will never yield  a fatal error - it is
+/// up to the user to decide which parsers should throw fatal errors with
+/// [`Parser::expect`].
+///
+/// Introducing fatal-throwing parsers will never cause another failing parser
+/// to succeed. It is only for providing more accurate error messages.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Error<E> {
+    inner: E,
+    recover: Recover,
+    at: usize,
+}
+
+impl<E> Error<E> {
+    pub fn new(inner: E, at: usize) -> Self {
+        Self {
+            inner,
+            recover: Recover::Recoverable,
+            at,
+        }
+    }
+
+    /// Map the error's inner value.
+    pub fn map<F, E1>(self, f: F) -> Error<E1>
+    where
+        F: Fn(E) -> E1,
+    {
+        let Error { inner, recover, at } = self;
+        Error {
+            inner: f(inner),
+            recover,
+            at,
+        }
+    }
+
+    /// Make this error fatal.
+    #[must_use]
+    pub fn fail(self) -> Error<E> {
+        Error {
+            recover: Recover::Fatal,
+            ..self
+        }
+    }
+}
+
+/// State within [`Error`]. Errors with `Recover::Fatal` short-circuit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Recover {
+    Recoverable,
+    Fatal,
 }

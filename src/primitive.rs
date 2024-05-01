@@ -9,7 +9,7 @@
 //! assert_eq!(character('a').then(just("bc")).parse("abc"), Ok(('a', "bc")));
 //! ```
 
-use crate::{Parser, Slice};
+use crate::{Error, Parser, Recover, Slice};
 
 /// Successfully parse nothing.
 pub fn identity<'a, I: Clone + 'a>() -> Parser<'a, I, (), ()> {
@@ -24,7 +24,7 @@ pub fn unit<'a, S: Slice<'a> + ?Sized>() -> Parser<'a, &'a S, S::Item, ()> {
         if let Some((c, len)) = rest.first() {
             Ok((c, at + len))
         } else {
-            Err(())
+            Err(Error::new((), at))
         }
     })
 }
@@ -40,7 +40,7 @@ where
         {
             Ok((expected, at + expected.len()))
         } else {
-            Err(())
+            Err(Error::new((), at))
         }
     })
 }
@@ -55,7 +55,10 @@ where
         for parser in parsers.as_ref() {
             match parser.parse_at(input.clone(), at) {
                 Ok((o, rest)) => return Ok((o, rest)),
-                Err(e) => last_error = Some(e),
+                Err(err) => match err.recover {
+                    Recover::Recoverable => last_error = Some(err),
+                    Recover::Fatal => return Err(err),
+                },
             }
         }
 

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use hair::{
-    primitive::{any, just, unit},
+    primitive::{any, unit},
     ParseResult, Parser,
 };
 
@@ -24,53 +24,72 @@ enum Value {
     Null,
 }
 
-fn ws<'a>() -> Parser<'a, &'a str, &'a str, ()> {
+#[allow(unused)]
+#[derive(Debug)]
+enum Expect {
+    Char(char),
+    String(&'static str),
+    Rule(&'static str),
+}
+
+fn just<'a>(string: &'static str) -> Parser<'a, &'a str, &'a str, Expect> {
+    hair::primitive::just(string).map_err(move |_| Expect::String(string))
+}
+
+fn ws<'a>() -> Parser<'a, &'a str, &'a str, Expect> {
     unit()
         .filter(|c: &char| c.is_whitespace())
         .ignore()
-        .many(..)
+        .many()
         .input()
+        .map_err(|_| unreachable!())
 }
 
-fn string<'a>() -> Parser<'a, &'a str, String, ()> {
-    just("\\\\")
+fn string<'a>() -> Parser<'a, &'a str, String, Expect> {
+    let u = just("\\\\")
         .or(just("\\\""))
         .ignore()
-        .or(unit::<str>().filter(|&c| c != '"').ignore())
-        .many(..)
+        .ignore_err()
+        .or(unit::<str>().filter(|&c| c != '"').ignore());
+
+    u.many()
         .input()
-        .surround(just("\""), just("\""))
+        .map_err(|_| Expect::Rule("string"))
+        .surround(just("\""), just("\"").expect())
         .map(String::from)
 }
 
-fn number<'a>() -> Parser<'a, &'a str, f32, ()> {
-    let digit = unit::<str>().filter(char::is_ascii_digit);
+fn number<'a>() -> Parser<'a, &'a str, f32, Expect> {
+    let digit = || unit::<str>().filter(char::is_ascii_digit);
+    let digits = || {
+        digit()
+            .then(digit().ignore().many())
+            .input()
+            .map_err(|_| Expect::Rule("digit"))
+    };
 
-    digit
-        .clone()
-        .ignore()
-        .many(1..)
-        .then(just(".").then(digit.ignore().many(1..)).optional())
+    digits()
+        .then(just(".").then(digits()).optional())
         .input()
         .map(|n| n.parse().unwrap())
 }
 
 // as it is now, recursive parsers must be defined at the function level
-fn value(input: &str, at: usize) -> ParseResult<Value, ()> {
+fn value(input: &str, at: usize) -> ParseResult<Value, Expect> {
     let object = {
         let member = string()
             .surround(ws(), ws())
-            .then(just(":").right(element()));
+            .then(just(":").expect().right(element().expect()));
 
         member
             .separate(just(","))
-            .surround(just("{"), just("}"))
+            .surround(just("{"), just("}").expect())
             .map(|members| Value::Object(members.into_iter().collect()))
     };
 
     let array = element()
         .separate(just(","))
-        .surround(just("["), just("]"))
+        .surround(just("["), just("]").expect())
         .map(Value::Array);
 
     any([
@@ -85,6 +104,6 @@ fn value(input: &str, at: usize) -> ParseResult<Value, ()> {
     .parse_at(input, at)
 }
 
-fn element<'a>() -> Parser<'a, &'a str, Value, ()> {
+fn element<'a>() -> Parser<'a, &'a str, Value, Expect> {
     Parser::new(value).surround(ws(), ws())
 }

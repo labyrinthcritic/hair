@@ -4,7 +4,8 @@ hair is a simple and extensible parser combinator crate that stays out of your w
 
 ## Features
 
- - Compose parsers in a modular, functional style, and test them independently of one another.
+ - Build complex parsers by composing simpler ones. Compose parsers in a
+   modular, functional style, and test them independently of one another.
 
  - Error handling is in the user's control. Parsers have an error type of `()`
    by default; these parsers can be `map_err`-ed to yield more useful errors.
@@ -34,7 +35,7 @@ hair is a simple and extensible parser combinator crate that stays out of your w
    let result = kind(Identifier).parse(tokens);
    ````
 
-   (Error propogation is WIP.)
+   See [`Error`] for more information about error propagation.
 
  - No dependencies :)
 
