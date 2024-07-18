@@ -15,8 +15,7 @@ pub type ParseResult<O, E> = Result<(O, usize), Error<E>>;
 /// Trait object of a parsing function.
 pub type ParseFn<'a, I, O, E> = dyn Fn(I, usize) -> ParseResult<O, E> + 'a;
 
-/// The type of any parser.
-/// This is a newtype around [`ParseFn`].
+/// The type of any parser, a wrapper for a [`ParseFn`] object.
 /// To run the parser, call [`Parser::parse`].
 #[must_use = "parsers are lazy; call `Parser::parse` to use them"]
 pub struct Parser<'a, I, O, E> {
@@ -176,11 +175,26 @@ impl<'a, I: Clone + 'a, O: 'a, E: 'a> Parser<'a, I, O, E> {
         left.right(self).left(right)
     }
 
-    /// Repeat this parser indefinitely.
+    /// Repeat this parser indefinitely until failure.
+    /// This is equivalent to `.many_with(None, None)`.
     pub fn many(self) -> Parser<'a, I, Vec<O>, E> {
+        self.many_with(None, None).map_err(|e| e.unwrap())
+    }
+
+    /// Repeat this parser until `at_most` is met. If the parser fails before
+    /// `at_least` outputs were collected, the parser will return Err(None).
+    pub fn many_with(
+        self,
+        at_least: Option<usize>,
+        at_most: Option<usize>,
+    ) -> Parser<'a, I, Vec<O>, Option<E>> {
         Parser::new(move |input: I, mut at| {
             let mut os = Vec::new();
             loop {
+                if at_most.is_some_and(|max| os.len() >= max) {
+                    break;
+                }
+
                 match self.parse_at(input.clone(), at) {
                     Ok((o, rest)) => {
                         os.push(o);
@@ -188,12 +202,21 @@ impl<'a, I: Clone + 'a, O: 'a, E: 'a> Parser<'a, I, O, E> {
                     }
                     Err(err) => match err.recover {
                         Recover::Recoverable => break,
-                        Recover::Fatal => return Err(err),
+                        Recover::Fatal => return Err(err.map(Some)),
                     },
                 }
             }
 
-            Ok((os, at))
+            if at_least.is_some_and(|min| os.len() < min) {
+                Err(Error {
+                    inner: None,
+                    recover: Recover::Recoverable,
+                    // TODO: at was mutated, is this correct?
+                    at,
+                })
+            } else {
+                Ok((os, at))
+            }
         })
     }
 
@@ -239,7 +262,7 @@ impl<'a, I: Clone + 'a, O: 'a, E: 'a> Parser<'a, I, O, E> {
         self.map_err(|_| ())
     }
 
-    /// Associate the output with the range of indices the parser consumed.
+    /// Associate the output with the range of indices that the parser consumed.
     pub fn with_span(self) -> Parser<'a, I, (O, Range<usize>), E> {
         Parser::new(move |input, at| {
             let (o, rest) = self.parse_at(input, at)?;
@@ -264,7 +287,7 @@ impl<'a, S: Slice<'a> + ?Sized, O: 'a, E: 'a> Parser<'a, &'a S, O, E> {
 /// hair borrows the error propagation mechanism seen in some other combinator
 /// libraries, such as nom. Errors have a state of 'recoverable' or 'fatal',
 /// where fatal errors will always propagate upward regardless of alternatives.
-/// hair's primitive combinators will never yield  a fatal error - it is
+/// hair's primitive combinators will never yield a fatal error - it is
 /// up to the user to decide which parsers should throw fatal errors with
 /// [`Parser::expect`].
 ///
