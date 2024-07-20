@@ -188,17 +188,18 @@ impl<'a, I: Clone + 'a, O: 'a, E: 'a> Parser<'a, I, O, E> {
         at_least: Option<usize>,
         at_most: Option<usize>,
     ) -> Parser<'a, I, Vec<O>, Option<E>> {
-        Parser::new(move |input: I, mut at| {
+        Parser::new(move |input: I, at| {
             let mut os = Vec::new();
+            let mut rest = at;
             loop {
                 if at_most.is_some_and(|max| os.len() >= max) {
                     break;
                 }
 
-                match self.parse_at(input.clone(), at) {
-                    Ok((o, rest)) => {
+                match self.parse_at(input.clone(), rest) {
+                    Ok((o, r)) => {
                         os.push(o);
-                        at = rest;
+                        rest = r;
                     }
                     Err(err) => match err.recover {
                         Recover::Recoverable => break,
@@ -215,7 +216,7 @@ impl<'a, I: Clone + 'a, O: 'a, E: 'a> Parser<'a, I, O, E> {
                     at,
                 })
             } else {
-                Ok((os, at))
+                Ok((os, rest))
             }
         })
     }
