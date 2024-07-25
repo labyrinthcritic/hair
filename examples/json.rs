@@ -6,6 +6,7 @@ use std::collections::HashMap;
 
 use hair::{
     primitive::{any, unit},
+    util::recognize_input,
     ParseResult, Parser,
 };
 
@@ -43,11 +44,9 @@ fn just<'a>(string: &'static str) -> Parser<'a, &'a str, &'a str, Expect> {
 }
 
 pub fn ws<'a>() -> Parser<'a, &'a str, &'a str, Expect> {
-    unit()
-        .filter(|c: &char| c.is_whitespace())
-        .ignore()
-        .many()
-        .input()
+    recognize_input(|c: &char| c.is_whitespace())
+        .optional()
+        .map(|s| s.unwrap_or(""))
         .map_err(|_| unreachable!())
 }
 
@@ -66,13 +65,7 @@ pub fn string<'a>() -> Parser<'a, &'a str, String, Expect> {
 }
 
 pub fn number<'a>() -> Parser<'a, &'a str, f32, Expect> {
-    let digit = || unit::<str>().filter(char::is_ascii_digit);
-    let digits = || {
-        digit()
-            .then(digit().ignore().many())
-            .input()
-            .map_err(|_| Expect::Rule("digit"))
-    };
+    let digits = || recognize_input(char::is_ascii_digit).map_err(|_| Expect::Rule("digit"));
 
     digits()
         .then(just(".").then(digits()).optional())

@@ -2,6 +2,7 @@
 
 pub mod primitive;
 pub mod slice;
+pub mod util;
 
 #[cfg(test)]
 mod test;
