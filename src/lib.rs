@@ -75,6 +75,8 @@ impl<'a, I: Clone + 'a, O: 'a, E: 'a> Parser<'a, I, O, E> {
         })
     }
 
+    /// Map the parser's output to construct a second parser using the output of
+    /// the first.
     pub fn flat_map<O1: 'a, F>(self, f: F) -> Parser<'a, I, O1, E>
     where
         F: Fn(O) -> Parser<'a, I, O1, E> + 'a,
@@ -121,6 +123,22 @@ impl<'a, I: Clone + 'a, O: 'a, E: 'a> Parser<'a, I, O, E> {
                 recover: Recover::Recoverable,
                 at,
             }),
+        })
+    }
+
+    /// Filter and map. Succeeds only if the predicate returns `Some`.
+    pub fn filter_map<P, O1: 'a>(self, predicate: P) -> Parser<'a, I, O1, ()>
+    where
+        P: Fn(O) -> Option<O1> + 'a,
+    {
+        Parser::new(move |input, at| {
+            let (o, rest) = self.clone().map_err(|_| ()).parse_at(input, at)?;
+
+            predicate(o).map(|o| (o, rest)).ok_or(Error {
+                inner: (),
+                recover: Recover::Recoverable,
+                at,
+            })
         })
     }
 

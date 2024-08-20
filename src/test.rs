@@ -58,6 +58,13 @@ fn filter() {
 }
 
 #[test]
+fn filter_map() {
+    let digit = unit().filter_map(|c: char| c.to_digit(10));
+    assert_eq!(digit.parse("123"), Ok(1));
+    assert_eq!(digit.parse("abc"), Err(((), 0)));
+}
+
+#[test]
 fn sequence() {
     let char = |c: char| unit::<str>().filter(move |&d| c == d);
     let p = char('h').then(char('e').or(char('a')));
