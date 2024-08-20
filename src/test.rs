@@ -37,6 +37,20 @@ fn map() {
 }
 
 #[test]
+fn flat_map() {
+    let p = unit().flat_map(|c: char| {
+        if c == '*' {
+            unit().many_with(Some(3), Some(3)).map_err(|_| ()).input()
+        } else {
+            unit().input()
+        }
+    });
+
+    assert_eq!(p.parse("-1234"), Ok("1"));
+    assert_eq!(p.parse("*1234"), Ok("123"));
+}
+
+#[test]
 fn filter() {
     let p = unit().filter(|&c| c == 'h');
     assert_eq!(p.parse("hello, world!"), Ok('h'));

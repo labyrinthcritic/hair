@@ -75,6 +75,16 @@ impl<'a, I: Clone + 'a, O: 'a, E: 'a> Parser<'a, I, O, E> {
         })
     }
 
+    pub fn flat_map<O1: 'a, F>(self, f: F) -> Parser<'a, I, O1, E>
+    where
+        F: Fn(O) -> Parser<'a, I, O1, E> + 'a,
+    {
+        Parser::new(move |input: I, at| {
+            let (o, at) = self.parse_at(input.clone(), at)?;
+            f(o).parse_at(input, at)
+        })
+    }
+
     /// Make a parser yield a fatal error on failure. This should be used in
     /// situations where a previous parser guarantees that this is the only
     /// correct parsing path.
