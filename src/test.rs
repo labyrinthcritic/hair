@@ -28,6 +28,14 @@ fn just() {
 }
 
 #[test]
+fn end() {
+    let p = primitive::just("abc").left(primitive::end());
+
+    assert_eq!(p.parse("abc"), Ok("abc"));
+    assert_eq!(p.parse("abcdef"), Err(((), 3)));
+}
+
+#[test]
 fn map() {
     let p = unit()
         .filter(char::is_ascii_digit)

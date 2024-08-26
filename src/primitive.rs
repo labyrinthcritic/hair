@@ -45,6 +45,16 @@ where
     })
 }
 
+pub fn end<'a, S: Slice<'a> + ?Sized>() -> Parser<'a, &'a S, (), ()> {
+    Parser::new(move |input: &S, at| {
+        if input.len() == at {
+            Ok(((), at))
+        } else {
+            Err(Error::new((), at))
+        }
+    })
+}
+
 /// Try all parsers in sequence. Equivalent to `a.or(b).or(c)...`.
 pub fn any<'a, I: Clone + 'a, O: 'a, E: 'a, Ps>(parsers: Ps) -> Parser<'a, I, O, E>
 where
